@@ -1,0 +1,45 @@
+name: validate-dhi-mirroring-claims
+on: [push, workflow_dispatch]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install regctl
+        run: |
+          curl -sL https://github.com/regclient/regclient/releases/latest/download/regctl-linux-amd64 -o regctl
+          chmod +x regctl
+          ./regctl version
+
+      - name: CLAIM 1 - docker pull resolves only ONE platform
+        run: |
+          docker pull -q python:3.13-alpine
+          echo "docker pull gave us exactly one platform:"
+          docker image inspect python:3.13-alpine --format '{{.Os}}/{{.Architecture}}'
+
+      - name: CLAIM 2 - regctl image copy moves ALL platforms
+        run: |
+          ./regctl image copy docker.io/library/python:3.13-alpine ocidir://mirror/python:3.13-alpine
+          echo "platforms present in the mirrored copy:"
+          ./regctl manifest get ocidir://mirror/python:3.13-alpine --format '{{range .Manifests}}{{println .Platform .Digest}}{{end}}'
+
+      - name: CLAIM 3 - mirror digest identical to source
+        run: |
+          SRC=$(./regctl image digest docker.io/library/python:3.13-alpine)
+          DST=$(./regctl image digest ocidir://mirror/python:3.13-alpine)
+          echo "source $SRC"
+          echo "mirror $DST"
+          test "$SRC" = "$DST"
+          echo "PASS - byte-identical copy"
+
+      - name: CLAIM 4 - re-copy is a cheap no-op, safe for weekly cron
+        run: |
+          time ./regctl image copy docker.io/library/python:3.13-alpine ocidir://mirror/python:3.13-alpine
+
+      - name: CLAIM 5 - helm charts are OCI artifacts, same tool mirrors them
+        run: |
+          TAG=$(./regctl tag ls docker.io/bitnamicharts/nginx | grep -E '^[0-9]+[.][0-9]+[.][0-9]+$' | sort -V | tail -1)
+          echo "chart tag: $TAG"
+          ./regctl image copy docker.io/bitnamicharts/nginx:$TAG ocidir://mirror/nginx-chart:$TAG
+          echo "config media type of mirrored artifact:"
+          ./regctl manifest get ocidir://mirror/nginx-chart:$TAG --format '{{.Config.MediaType}}'
